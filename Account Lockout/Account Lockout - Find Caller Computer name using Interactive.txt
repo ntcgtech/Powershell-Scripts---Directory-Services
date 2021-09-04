@@ -1,0 +1,102 @@
+#requires -version 2
+<#
+.SYNOPSIS
+  Lists date, time and machine name where the specified account was locked. Used for troubleshooting account lockout issues.
+.DESCRIPTION
+  This script outputs to specified file all of the recent account lockouts that have occurred for the specified user. The results returned are the machine name where this has occurred and the data & time it occurred at. This script is very useful for troubleshooting account lockout issues.
+  Note: This script only searches current security logs on the domain controllers specified within the $DCs variable
+.PARAMETER None
+.INPUTS Username
+  Via Input Box. Specify the username that you want to search account lock-outs for. Note: Do not put the domain name before the user (e.g. ).
+.INPUTS LogFilePath
+  Via Input Box. Specify the full path of where the results log file should be saved. Example: C:\Logs\AccountLockouts.txt.
+.OUTPUTS
+  Log file stored in the location specified by the LogFilePath input.
+.NOTES
+  Version:    1.0
+  Creation Date:  06.08.2012
+  Purpose/Change: Initial script development
+.EXAMPLE
+  None - run this script via PowerShell interface (right-click script and select Run with PowerShell)
+#>
+
+#---------------------------------------------------------[Initialisations]--------------------------------------------------------
+
+#Set Error Action to Silently Continue
+$ErrorActionPreference = "SilentlyContinue"
+
+#----------------------------------------------------------[Declarations]----------------------------------------------------------
+
+#Arrays used to process results & output
+$aLockOutDetails = @()
+$aOutput = @()
+
+#List of DCs to search security logs for
+$DCs = "ntcgtechdc01", "ntcgtechdc02"
+
+#-----------------------------------------------------------[Execution]------------------------------------------------------------
+
+#Prompt user to enter data
+$sUsername = read-host -prompt "Enter the user you want to search account lockouts for. Note: Do not put the domain name before the user (e.g. )"
+$sLogPath = read-host -prompt "Enter the full path of where you want to save the results (including file name). Example: C:\Logs\AccountLockouts.txt"
+
+#Check data entered by user
+If(!$sUsername -Or !$sLogPath){
+  $oMsgBox = New-Object -ComObject Wscript.Shell
+  $oMsgBox.Popup("No username or log path entered. Script exiting.",0,"Error!")
+  Exit
+}
+
+#Collect result from each DC & store in aLockOutDetails array
+ForEach($DC in $DCs){
+    $Results = Get-WinEvent -FilterHashTable @{LogName="Security"; ID=4740} -ComputerName $DC | Select Message, TimeCreated
+    ForEach($Result in $Results){
+      [string]$Item = $Result.Message
+      If($Item.IndexOf($sUsername) -gt 0){
+        $sMachineName = $Item.SubString($Item.IndexOf("Caller Computer Name"))
+        $sMachineName = $sMachineName.TrimStart("Caller Computer Name :")
+        $sMachineName = $sMachineName.TrimEnd("}")
+        $sMachineName = $sMachineName.Trim()
+        $sMachineName = $sMachineName.TrimStart("\\")
+
+        #Set required info into hashtable
+        $hItemDetails = New-Object -TypeName psobject -Property @{
+          MachineName = $sMachineName
+          TimeCreated = $Result.TimeCreated
+        }
+
+        #Add each item hash table to array
+        $aLockOutDetails += $hItemDetails
+      }
+    }
+}
+
+#Check if any results found & format for output
+If($aLockOutDetails.Length -eq 0){
+  $aOutput += "Account lock-out results for: $sUsername"
+  $aOutput += " "
+  $aOutput += " "
+  $aOutput += "No results found."
+}Else{
+  #Format output for log file
+  $aOutput += "Account lock-out results for: $sUsername"
+  $aOutput += " "
+  $aOutput += " "
+  $aOutput += "Machine Name`t`t`t`t`t`t`tDate & Time"
+  $aOutput += "------------------------------------------------------------------------------------"
+
+  ForEach($Line in $aLockOutDetails){
+    $sMachine = $Line.MachineName
+    $sDate = $Line.TimeCreated
+    $aOutput += "$sMachine`t`t`t`t`t`t`t$sDate"
+  }
+}
+
+#Output to log file
+$aOutput | Set-Content $sLogPath
+
+#Pause for 2 seconds
+Start-Sleep -Seconds 2
+
+#Open Log file in notepad.exe
+Notepad.exe $sLogPath
